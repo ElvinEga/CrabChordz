@@ -145,6 +145,9 @@ impl Plugin for ChordzMac {
             self.engine
                 .preview(&state, &setups, variation, index, 0, block_start);
         }
+        if let Some(note) = self.params.take_note_preview() {
+            self.engine.preview_note(note, 0, block_start);
+        }
 
         while let Some(event) = context.next_event() {
             let time = block_start + event.timing() as u64;

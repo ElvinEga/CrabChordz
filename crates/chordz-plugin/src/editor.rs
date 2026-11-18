@@ -1,57 +1,97 @@
-//! The egui editor.
+//! The egui editor, modelled on the original Chordz window: a header with the
+//! menu, preset name and info panel, two main pages (Chord Setup and
+//! Timing/Velocity) plus a slim Presets tab, and modal preset dialogs.
 //!
-//! The layout follows the original Chordz window: a trigger keyboard at the top,
-//! the scale/chord setup below it, a note timing page, and preset handling.
-//! The timing page uses host parameters so those values can be automated.
+//! The design is laid out on a fixed 1160×700 canvas that is proportionally
+//! zoomed to fit the (resizable) host window.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use chordz_core::data::{default_data_dir, load_library, suggest_triads, Library, MenuEntry};
-use chordz_core::model::{
-    note_name, note_name_with_octave, ChordzState, NoteSetup, NUM_NOTE_SLOTS,
-};
-use chordz_core::preset::{
-    list_presets, load_preset_file, preset_dir, save_preset_as, Preset, PresetFormat,
-};
-use nih_plug::prelude::{Editor, ParamSetter};
+use chordz_core::data::{default_data_dir, load_library, suggest_triads, Library};
+use chordz_core::model::{ChordzState, Trigger};
+use chordz_core::preset::{list_presets, preset_dir, PresetFormat};
+use nih_plug::prelude::{Editor, Param, ParamSetter};
 use nih_plug_egui::create_egui_editor;
-use nih_plug_egui::egui::{
-    self, Align2, Color32, ComboBox, CornerRadius, FontId, RichText, Sense, Vec2,
-};
-use nih_plug_egui::widgets::ParamSlider;
+use nih_plug_egui::egui::{self, Frame, Layout, Margin, Rect, RichText, UiBuilder, Vec2};
+use nih_plug_egui::resizable_window::ResizableWindow;
+
+mod presets;
+mod setup;
+mod theme;
+mod timing;
+mod widgets;
 
 use crate::params::ChordzParams;
+use widgets::ParamKind;
 
-const KEYS_START: u8 = 48; // C3
-const KEYS_END: u8 = 83; // B5
-
-const WHITE_KEY_WIDTH: f32 = 34.0;
-const KEYBOARD_HEIGHT: f32 = 92.0;
-
-const TRIGGER_FILL: Color32 = Color32::from_rgb(247, 224, 158);
-const TRIGGER_FILL_HOVER: Color32 = Color32::from_rgb(255, 238, 188);
-const TRIGGER_BLACK_FILL: Color32 = Color32::from_rgb(196, 140, 40);
-const TRIGGER_BLACK_HOVER: Color32 = Color32::from_rgb(228, 168, 56);
-const WHITE_FILL: Color32 = Color32::from_rgb(238, 238, 236);
-const BLACK_FILL: Color32 = Color32::from_rgb(54, 54, 58);
+const DESIGN_W: f32 = 1160.0;
+const DESIGN_H: f32 = 700.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
-    Chords,
+pub enum Tab {
+    Setup,
     Timing,
     Presets,
-    Help,
 }
 
-struct EditorState {
+/// Which trigger the chord-note keyboard is editing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Selection {
+    Degree(usize),
+    Variation(usize),
+}
+
+impl Selection {
+    pub fn variation(self) -> bool {
+        matches!(self, Self::Variation(_))
+    }
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Degree(index) | Self::Variation(index) => index,
+        }
+    }
+
+    pub fn get(self, state: &ChordzState) -> Option<&Trigger> {
+        match self {
+            Self::Degree(index) => state.triggers.get(index),
+            Self::Variation(index) => state.variations.get(index),
+        }
+    }
+
+    pub fn get_mut(self, state: &mut ChordzState) -> Option<&mut Trigger> {
+        match self {
+            Self::Degree(index) => state.triggers.get_mut(index),
+            Self::Variation(index) => state.variations.get_mut(index),
+        }
+    }
+}
+
+pub struct EditorState {
     library: Library,
     data_dir: PathBuf,
     presets: Vec<PathBuf>,
     tab: Tab,
+    /// Name of the last loaded/saved preset, shown in the header.
     preset_name: String,
+    save_name: String,
     preset_format: PresetFormat,
     message: String,
+    /// Info panel text: the hovered control or the selected trigger.
+    info: String,
+    selection: Option<Selection>,
+    /// Template picked in the dropdown but not applied yet.
+    template_choice: Option<usize>,
+    clipboard: Option<Trigger>,
+    hover_key: Option<usize>,
+    load_dialog: bool,
+    load_selected: Option<usize>,
+    save_dialog: bool,
+    delete_confirm: Option<PathBuf>,
+    id_edit: Option<(Selection, String)>,
+    value_entry: Option<(usize, ParamKind, String)>,
+    about: bool,
 }
 
 pub fn create(params: Arc<ChordzParams>) -> Option<Box<dyn Editor>> {
@@ -60,10 +100,9 @@ pub fn create(params: Arc<ChordzParams>) -> Option<Box<dyn Editor>> {
 
     let message = if warnings.is_empty() {
         format!(
-            "Loaded {} chord types and {} scale templates from {}",
+            "Loaded {} chord types and {} scale templates",
             library.chords.len(),
-            library.templates.len(),
-            data_dir.display()
+            library.templates.len()
         )
     } else {
         warnings.join(" | ")
@@ -73,10 +112,23 @@ pub fn create(params: Arc<ChordzParams>) -> Option<Box<dyn Editor>> {
         library,
         presets: list_presets(&preset_dir()),
         data_dir,
-        tab: Tab::Chords,
-        preset_name: "My Chords".to_string(),
+        tab: Tab::Setup,
+        preset_name: "Init".to_string(),
+        save_name: String::new(),
         preset_format: PresetFormat::Codefn42p,
         message,
+        info: String::new(),
+        selection: None,
+        template_choice: None,
+        clipboard: None,
+        hover_key: None,
+        load_dialog: false,
+        load_selected: None,
+        save_dialog: false,
+        delete_confirm: None,
+        id_edit: None,
+        value_entry: None,
+        about: false,
     };
 
     let egui_state = params.editor_state.clone();
@@ -84,7 +136,7 @@ pub fn create(params: Arc<ChordzParams>) -> Option<Box<dyn Editor>> {
         egui_state,
         state,
         |ctx, _state| {
-            ctx.set_visuals(egui::Visuals::dark());
+            theme::apply(ctx);
         },
         move |ctx, setter, state| {
             draw(ctx, setter, state, &params);
@@ -93,35 +145,36 @@ pub fn create(params: Arc<ChordzParams>) -> Option<Box<dyn Editor>> {
 }
 
 fn draw(ctx: &egui::Context, setter: &ParamSetter, es: &mut EditorState, params: &ChordzParams) {
-    egui::TopBottomPanel::top("chordzmac_header").show(ctx, |ui| {
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.heading(RichText::new("ChordzMac").strong());
-            ui.label(RichText::new("MIDI chord generator").weak());
-            ui.separator();
-            ui.selectable_value(&mut es.tab, Tab::Chords, "Chords");
-            ui.selectable_value(&mut es.tab, Tab::Timing, "Note Timing");
-            ui.selectable_value(&mut es.tab, Tab::Presets, "Presets");
-            ui.selectable_value(&mut es.tab, Tab::Help, "Help");
-        });
-        ui.add_space(4.0);
-    });
+    // Proportional zoom: fit the design canvas into the window, letterboxing
+    // the leftovers. Computed from the zoom-independent size so it is stable.
+    let screen = ctx.screen_rect();
+    let base_w = screen.width() * ctx.zoom_factor();
+    let base_h = screen.height() * ctx.zoom_factor();
+    let zoom = (base_w / DESIGN_W).min(base_h / DESIGN_H).clamp(0.4, 4.0);
+    ctx.set_zoom_factor(zoom);
 
-    egui::TopBottomPanel::bottom("chordzmac_status").show(ctx, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(&es.message).small());
+    ResizableWindow::new("chordzmac-window")
+        .min_size(Vec2::new(580.0, 350.0))
+        .show(ctx, &params.editor_state, |ui| {
+            let available = ui.available_rect_before_wrap();
+            let design = Rect::from_center_size(available.center(), Vec2::new(DESIGN_W, DESIGN_H));
+            let mut ui = ui.new_child(UiBuilder::new().max_rect(design));
+            draw_design(&mut ui, setter, es, params);
         });
-    });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
-        let mut state = params.chordz_state.write();
-        match es.tab {
-            Tab::Chords => chords_tab(ui, es, &mut state, params),
-            Tab::Timing => timing_tab(ui, setter, params),
-            Tab::Presets => presets_tab(ui, setter, es, &mut state, params),
-            Tab::Help => help_tab(ui),
-        }
-    });
+    // Dialogs are drawn after the page so they can take their own state locks.
+    if es.load_dialog {
+        presets::load_dialog(ctx, es, params, setter);
+    }
+    if es.save_dialog {
+        presets::save_dialog(ctx, es, params);
+    }
+    if es.delete_confirm.is_some() {
+        presets::delete_confirm(ctx, es);
+    }
+    value_entry_dialog(ctx, es, params, setter);
+    id_edit_dialog(ctx, es, params);
+    about_dialog(ctx, es);
 
     // Keep the persisted setup's copy of the timing values in sync with the
     // host parameters so saved state and presets stay coherent.
@@ -132,637 +185,268 @@ fn draw(ctx: &egui::Context, setter: &ParamSetter, es: &mut EditorState, params:
     }
 }
 
-fn chords_tab(
-    ui: &mut egui::Ui,
-    es: &mut EditorState,
-    state: &mut ChordzState,
-    params: &ChordzParams,
-) {
-    ui.horizontal(|ui| {
-        ui.label("Tonic");
-        ComboBox::from_id_salt("tonic")
-            .selected_text(RichText::new(note_name(state.tonic)).strong())
-            .width(64.0)
-            .show_ui(ui, |ui| {
-                for pc in 0u8..12 {
-                    if ui
-                        .selectable_label(state.tonic == pc, note_name(pc))
-                        .clicked()
-                    {
-                        set_tonic(state, pc);
-                    }
-                }
-            });
-        if ui
-            .small_button("−")
-            .on_hover_text("Transpose down a semitone")
-            .clicked()
-        {
-            state.transpose_tonic(-1);
-        }
-        if ui
-            .small_button("+")
-            .on_hover_text("Transpose up a semitone")
-            .clicked()
-        {
-            state.transpose_tonic(1);
-        }
-
-        ui.separator();
-        ui.label("Scale / chord template");
-        let template_label = if state.template_name.is_empty() {
-            "Custom".to_string()
-        } else {
-            state.template_name.clone()
-        };
-        ComboBox::from_id_salt("template")
-            .selected_text(template_label)
-            .width(230.0)
-            .show_ui(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(360.0)
-                    .show(ui, |ui| {
-                        for entry in &es.library.template_menu {
-                            match entry {
-                                MenuEntry::Group(name) => {
-                                    ui.label(RichText::new(name).small().strong());
-                                }
-                                MenuEntry::Separator => {
-                                    ui.separator();
-                                }
-                                MenuEntry::Item(template_index) => {
-                                    let template = &es.library.templates[*template_index];
-                                    if ui
-                                        .selectable_label(
-                                            state.template_name == template.name,
-                                            &template.name,
-                                        )
-                                        .clicked()
-                                    {
-                                        state.apply_template(template);
-                                    }
-                                }
-                            }
-                        }
-                    });
-            });
-
-        if ui
-            .button("Suggest triads")
-            .on_hover_text(
-                "Replace the chord triggers with diatonic triads built from the current scale",
-            )
-            .clicked()
-        {
-            apply_suggested_triads(es, state);
-        }
-    });
-
-    ui.add_space(6.0);
-    draw_keyboard(ui, state, params);
-    ui.add_space(2.0);
-    ui.label(
-        RichText::new(
-            "Click a key to preview its chord. Amber keys trigger chords; grey keys are outside the scale.",
-        )
-        .small()
-        .weak(),
-    );
-    ui.separator();
-
-    ui.columns(2, |columns| {
-        columns[0].heading("Chord triggers");
-        egui::ScrollArea::vertical()
-            .id_salt("triggers-scroll")
-            .max_height(300.0)
-            .show(&mut columns[0], |ui| {
-                let count = state.triggers.len();
-                for index in 0..count {
-                    let root = state.triggers[index].root;
-                    let chord_id = state.triggers[index].chord_id.clone();
-                    let enabled = state.triggers[index].enabled;
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut state.triggers[index].enabled, "")
-                            .on_hover_text(
-                                "Unused triggers keep their key position but play nothing",
-                            );
-                        ui.label(
-                            RichText::new(format!("{:>2}. {}", index + 1, note_name(root)))
-                                .monospace(),
-                        );
-                        chord_selector(
-                            ui,
-                            ("trigger-chord", index),
-                            &chord_id,
-                            false,
-                            index,
-                            state,
-                            &es.library,
-                        );
-                        if ui
-                            .add_enabled(enabled, egui::Button::new("▶").small())
-                            .on_hover_text("Preview")
-                            .clicked()
-                        {
-                            params.request_preview(false, index);
-                        }
-                    });
-                }
-
-                if state.variations.iter().any(|trigger| trigger.enabled) {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new("Black key variations").strong());
-                    let count = state.variations.len();
-                    for index in 0..count {
-                        let root = state.variations[index].root;
-                        let chord_id = state.variations[index].chord_id.clone();
-                        let enabled = state.variations[index].enabled;
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut state.variations[index].enabled, "")
-                                .on_hover_text(
-                                    "Unused variations keep their key position but play nothing",
-                                );
-                            ui.label(
-                                RichText::new(format!("{:>2}. {}", index + 1, note_name(root)))
-                                    .monospace(),
-                            );
-                            chord_selector(
-                                ui,
-                                ("variation-chord", index),
-                                &chord_id,
-                                true,
-                                index,
-                                state,
-                                &es.library,
-                            );
-                            if ui
-                                .add_enabled(enabled, egui::Button::new("▶").small())
-                                .on_hover_text("Preview")
-                                .clicked()
-                            {
-                                params.request_preview(true, index);
-                            }
-                        });
-                    }
-                }
-            });
-
-        columns[1].heading("Setup");
-        egui::ScrollArea::vertical()
-            .id_salt("setup-scroll")
-            .max_height(300.0)
-            .show(&mut columns[1], |ui| {
-                ui.checkbox(&mut state.easy_mode, "Easy mode")
-                    .on_hover_text(
-                        "The seven white keys play the first seven scale degrees; extra degrees \
-                         and black-key variations move to C#, D#, F#, G#, A#.",
-                    );
-                ui.checkbox(&mut state.follow_trigger_notes, "Follow trigger notes")
-                    .on_hover_text("Notes outside the chord zone are snapped to the scale.");
-                ui.checkbox(&mut state.relative_timing, "Relative timing")
-                    .on_hover_text("Start and end delays accumulate across the chord notes.");
-                ui.checkbox(&mut state.same_random_velocity, "Same random velocity")
-                    .on_hover_text("All notes in a chord share one random velocity draw.");
-                ui.checkbox(&mut state.random_note_assignment, "Random note assignment")
-                    .on_hover_text("Assign each chord note to a random timing slot.");
-
-                ui.add_space(4.0);
-                ui.separator();
-                ui.label(RichText::new("Keyboard zones").strong());
-                ui.horizontal(|ui| {
-                    ui.label("Chords from octave");
-                    ui.add(
-                        egui::DragValue::new(&mut state.octave_from)
-                            .range(-2..=8)
-                            .speed(0.1),
-                    );
-                    ui.label("to");
-                    ui.add(
-                        egui::DragValue::new(&mut state.octave_to)
-                            .range(-2..=8)
-                            .speed(0.1),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Transpose chords");
-                    ui.add(
-                        egui::DragValue::new(&mut state.transpose_octave)
-                            .range(-4..=4)
-                            .speed(0.1),
-                    )
-                    .on_hover_text("Octaves added to every generated chord note");
-                    ui.label("octave(s)");
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Below zone");
-                    ui.add(
-                        egui::DragValue::new(&mut state.transpose_below)
-                            .range(-4..=4)
-                            .speed(0.1),
-                    );
-                    ui.label("Above zone");
-                    ui.add(
-                        egui::DragValue::new(&mut state.transpose_above)
-                            .range(-4..=4)
-                            .speed(0.1),
-                    );
-                });
-                ui.horizontal(|ui| {
-                    ui.label("MIDI note 0 is octave");
-                    ui.add(egui::DragValue::new(&mut state.lowest_octave).range(-2..=0));
-                });
-
-                ui.add_space(4.0);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui.button("Reset to Major").clicked() {
-                        *state = ChordzState::default();
-                    }
-                    if ui
-                        .button("Reload library")
-                        .on_hover_text("Re-read Chords.txt and Scale Templates.txt")
-                        .clicked()
-                    {
-                        let (library, warnings) = load_library(&es.data_dir);
-                        es.library = library;
-                        es.message = if warnings.is_empty() {
-                            format!("Reloaded {} chord types", es.library.chords.len())
-                        } else {
-                            warnings.join(" | ")
-                        };
-                    }
-                });
-            });
-    });
-}
-
-fn chord_selector(
-    ui: &mut egui::Ui,
-    id: impl std::hash::Hash,
-    current: &str,
-    variation: bool,
-    index: usize,
-    state: &mut ChordzState,
-    library: &Library,
-) {
-    ComboBox::from_id_salt(id)
-        .selected_text(if current.is_empty() { "—" } else { current })
-        .width(140.0)
-        .show_ui(ui, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(320.0)
-                .show(ui, |ui| {
-                    let mut last_was_group = false;
-                    for entry in &library.chord_menu {
-                        match entry {
-                            MenuEntry::Group(name) => {
-                                if !last_was_group {
-                                    ui.add_space(2.0);
-                                }
-                                ui.label(RichText::new(name).small().weak());
-                                last_was_group = true;
-                            }
-                            MenuEntry::Separator => {
-                                ui.separator();
-                                last_was_group = false;
-                            }
-                            MenuEntry::Item(chord_index) => {
-                                let chord = &library.chords[*chord_index];
-                                if ui
-                                    .selectable_label(false, &chord.name)
-                                    .on_hover_text(describe(library, *chord_index))
-                                    .clicked()
-                                {
-                                    let target = if variation {
-                                        state.variations.get_mut(index)
-                                    } else {
-                                        state.triggers.get_mut(index)
-                                    };
-                                    if let Some(target) = target {
-                                        target.notes = chord.notes.clone();
-                                        target.set_chord_id(&chord.chord_id);
-                                    }
-                                }
-                                last_was_group = false;
-                            }
-                        }
-                    }
-                });
-        });
-}
-
-fn describe(library: &Library, chord_index: usize) -> String {
-    let chord = &library.chords[chord_index];
-    if chord.notes.is_empty() {
-        return chord.name.clone();
-    }
-    let mut parts = Vec::new();
-    for note in &chord.notes {
-        parts.push(format!("{:+}", note.semitone));
-    }
-    parts.join(" ")
-}
-
-fn timing_tab(ui: &mut egui::Ui, setter: &ParamSetter, params: &ChordzParams) {
-    ui.heading("Note timing and velocity");
-    ui.label(
-        RichText::new(
-            "Each chord note is assigned to one of five slots (the original numbers the notes of \
-             a chord 1 to 5, and the /n suffix in Chords.txt overrides that). Start and End are \
-             delays in milliseconds; velocity is scaled in percent.",
-        )
-        .small()
-        .weak(),
-    );
-    ui.add_space(6.0);
-
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.columns(NUM_NOTE_SLOTS, |columns| {
-            for (slot, column) in columns.iter_mut().enumerate() {
-                let slot_params = &params.slots[slot];
-                column.heading(format!("Note {}", slot + 1));
-                column.add(ParamSlider::for_param(&slot_params.start_ms, setter));
-                column.add(ParamSlider::for_param(&slot_params.start_random_ms, setter));
-                column.add(ParamSlider::for_param(&slot_params.end_ms, setter));
-                column.add(ParamSlider::for_param(&slot_params.end_random_ms, setter));
-                column.add(ParamSlider::for_param(&slot_params.velocity_scale, setter));
-                column.add(ParamSlider::for_param(&slot_params.velocity_random, setter));
-            }
-        });
-
-        ui.add_space(10.0);
-        ui.separator();
-        ui.label(
-            RichText::new(
-                "Tip: negative velocity scale makes notes softer, positive makes them louder. \
-                 Velocity random adds up to the given percentage on top.",
-            )
-            .small()
-            .weak(),
-        );
-    });
-}
-
-fn presets_tab(
+fn draw_design(
     ui: &mut egui::Ui,
     setter: &ParamSetter,
     es: &mut EditorState,
-    state: &mut ChordzState,
     params: &ChordzParams,
 ) {
-    ui.heading("Presets");
-    ui.label(
-        RichText::new(format!(
-            "Presets are stored in {}. Both original Chordz (.codefn42p) and \
-             ChordzMac (.json) files are listed.",
-            preset_dir().display()
-        ))
-        .small()
-        .weak(),
-    );
+    let mut state = params.chordz_state.write();
+
+    // Header: menu, title, preset name, info panel.
+    ui.horizontal(|ui| {
+        ui.menu_button(RichText::new("☰").size(18.0), |ui| {
+            menu_contents(ui, es, &mut state, params, setter);
+        });
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("Chordz")
+                .size(26.0)
+                .strong()
+                .color(theme::TEAL),
+        );
+        ui.add_space(10.0);
+        if ui
+            .button(RichText::new(&es.preset_name).size(14.0))
+            .on_hover_text("Load a preset")
+            .clicked()
+        {
+            es.presets = list_presets(&preset_dir());
+            es.load_selected = None;
+            es.load_dialog = true;
+        }
+
+        ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
+            let text = if es.info.is_empty() {
+                es.message.clone()
+            } else {
+                es.info.clone()
+            };
+            Frame::new()
+                .fill(theme::BG_DARK)
+                .corner_radius(4)
+                .inner_margin(Margin::symmetric(8, 4))
+                .show(ui, |ui| {
+                    ui.set_width(330.0);
+                    ui.add(
+                        egui::Label::new(RichText::new(text).size(12.0).color(theme::TEXT))
+                            .truncate(),
+                    );
+                });
+        });
+    });
+
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut es.tab, Tab::Setup, "Chord Setup");
+        ui.selectable_value(&mut es.tab, Tab::Timing, "Timing / Velocity");
+        ui.selectable_value(&mut es.tab, Tab::Presets, "Presets");
+    });
+    ui.separator();
     ui.add_space(4.0);
 
-    ui.horizontal(|ui| {
-        ui.label("Name");
-        ui.text_edit_singleline(&mut es.preset_name);
-        ComboBox::from_id_salt("preset-format")
-            .selected_text(match es.preset_format {
-                PresetFormat::Codefn42p => "Chordz (.codefn42p)",
-                PresetFormat::Json => "ChordzMac (.json)",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(
-                    &mut es.preset_format,
-                    PresetFormat::Codefn42p,
-                    "Chordz (.codefn42p)",
-                );
-                ui.selectable_value(
-                    &mut es.preset_format,
-                    PresetFormat::Json,
-                    "ChordzMac (.json)",
-                );
-            });
-        if ui.button("Save preset").clicked() {
-            let mut snapshot = state.clone();
-            let setups: [NoteSetup; NUM_NOTE_SLOTS] = params.setups();
-            snapshot.note_setup = setups;
-            let preset = Preset::new(es.preset_name.clone(), snapshot, setups);
-            match save_preset_as(&preset, &preset_dir(), es.preset_format) {
-                Ok(path) => {
-                    es.message = format!("Saved {}", path.display());
-                    es.presets = list_presets(&preset_dir());
-                }
-                Err(err) => es.message = err,
+    match es.tab {
+        Tab::Setup => setup::page(ui, es, &mut state, params),
+        Tab::Timing => timing::page(ui, es, setter, params, &mut state),
+        Tab::Presets => presets::tab(ui, es, &mut state, params, setter),
+    }
+}
+
+fn menu_contents(
+    ui: &mut egui::Ui,
+    es: &mut EditorState,
+    state: &mut ChordzState,
+    params: &ChordzParams,
+    setter: &ParamSetter,
+) {
+    if ui.button("Init").clicked() {
+        presets::init(es, state, params, setter);
+        ui.close_menu();
+    }
+    if ui.button("Load Preset…").clicked() {
+        es.presets = list_presets(&preset_dir());
+        es.load_selected = None;
+        es.load_dialog = true;
+        ui.close_menu();
+    }
+    if ui.button("Save Preset…").clicked() {
+        es.save_name = es.preset_name.clone();
+        es.save_dialog = true;
+        ui.close_menu();
+    }
+    ui.separator();
+    ui.menu_button("Lowest Octave", |ui| {
+        for lowest in [-2i8, -1, 0] {
+            if ui
+                .selectable_label(state.lowest_octave == lowest, format!("{lowest}"))
+                .clicked()
+            {
+                state.lowest_octave = lowest;
+                ui.close_menu();
             }
         }
     });
-
     ui.separator();
-    let paths = es.presets.clone();
-    if paths.is_empty() {
-        ui.label("No presets saved yet.");
-    } else {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for path in paths {
-                ui.horizontal(|ui| {
-                    let name = path
-                        .file_stem()
-                        .map(|stem| stem.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path.display().to_string());
-                    let extension = path
-                        .extension()
-                        .map(|ext| ext.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    ui.label(name);
-                    ui.label(RichText::new(format!(".{extension}")).small().weak());
-                    if ui.button("Load").clicked() {
-                        match load_preset_file(&path) {
-                            Ok(preset) => {
-                                *state = preset.state;
-                                es.preset_name = preset.name.clone();
-                                es.preset_format =
-                                    match path.extension().and_then(|ext| ext.to_str()) {
-                                        Some("json") => PresetFormat::Json,
-                                        _ => PresetFormat::Codefn42p,
-                                    };
-                                params.apply_setups(&preset.note_setup, setter);
-                                es.message = format!("Loaded {}", path.display());
-                            }
-                            Err(err) => es.message = err,
-                        }
-                    }
-                });
-            }
-        });
+    if ui.button("Suggest triads").clicked() {
+        apply_suggested_triads(es, state);
+        ui.close_menu();
     }
-
-    ui.add_space(8.0);
+    if ui.button("Reset to Major").clicked() {
+        *state = ChordzState::default();
+        es.selection = None;
+        es.message = "Reset to C major".to_string();
+        ui.close_menu();
+    }
+    if ui
+        .button("Reload library")
+        .on_hover_text("Re-read Chords.txt and Scale Templates.txt")
+        .clicked()
+    {
+        let (library, warnings) = load_library(&es.data_dir);
+        es.library = library;
+        es.message = if warnings.is_empty() {
+            format!("Reloaded {} chord types", es.library.chords.len())
+        } else {
+            warnings.join(" | ")
+        };
+        ui.close_menu();
+    }
     ui.separator();
-    ui.label(RichText::new("Data files").strong());
-    ui.label(
-        RichText::new(format!(
-            "Chords.txt and Scale Templates.txt live in {}. Edit them and press \
-             \"Reload library\" on the Chords page to pick up the changes.",
-            es.data_dir.display()
-        ))
-        .small(),
-    );
+    if ui.button("About").clicked() {
+        es.about = true;
+        ui.close_menu();
+    }
 }
 
-fn help_tab(ui: &mut egui::Ui) {
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        ui.heading("How ChordzMac works");
-        ui.label(
-            "ChordzMac is a MIDI processor. Put it before an instrument and play notes in the \
-             chord trigger zone: every note is replaced by the chord assigned to its scale degree. \
-             Outside the zone the note is passed through, optionally transposed or snapped to the \
-             scale.",
-        );
+// ---------------------------------------------------------------------------
+// Small modal dialogs
+// ---------------------------------------------------------------------------
+
+fn value_entry_dialog(
+    ctx: &egui::Context,
+    es: &mut EditorState,
+    params: &ChordzParams,
+    setter: &ParamSetter,
+) {
+    if es.value_entry.is_none() {
+        return;
+    }
+    let mut commit = false;
+    let mut cancel = false;
+    let (slot, kind, text) = es.value_entry.as_mut().unwrap();
+    let param = widgets::param_for(params, *slot, *kind);
+    let modal = egui::Modal::new(egui::Id::new("value-entry")).show(ctx, |ui| {
+        ui.set_width(240.0);
+        ui.heading(param.name());
+        ui.add_space(4.0);
+        let response = ui.text_edit_singleline(text);
+        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            commit = true;
+        }
         ui.add_space(6.0);
-        ui.label(RichText::new("Playing").strong());
-        ui.label(
-            "• With Easy mode off, the pressed note's pitch class must match a chord root.\n\
-             • With Easy mode on, the white keys play the first seven scale degrees.\n\
-             • Octave From/To choose which octaves trigger chords.\n\
-             • Transpose Chords shifts generated notes by whole octaves.\n\
-             • Notes below/above the zone are transposed by the Below/Above zone values.",
-        );
+        ui.horizontal(|ui| {
+            if ui.button("OK").clicked() {
+                commit = true;
+            }
+            if ui.button("Cancel").clicked() {
+                cancel = true;
+            }
+        });
+    });
+    if commit {
+        if let Ok(value) = text.trim().parse::<f32>() {
+            let (min, max) = widgets::param_bounds(param);
+            setter.begin_set_parameter(param);
+            setter.set_parameter(param, value.clamp(min, max));
+            setter.end_set_parameter(param);
+        } else {
+            es.message = format!("\"{text}\" is not a number");
+        }
+        es.value_entry = None;
+    } else if cancel || modal.should_close() {
+        es.value_entry = None;
+    }
+}
+
+fn id_edit_dialog(ctx: &egui::Context, es: &mut EditorState, params: &ChordzParams) {
+    if es.id_edit.is_none() {
+        return;
+    }
+    let mut commit = false;
+    let mut cancel = false;
+    let (selection, text) = es.id_edit.as_mut().unwrap();
+    let selection = *selection;
+    let modal = egui::Modal::new(egui::Id::new("chord-id")).show(ctx, |ui| {
+        ui.set_width(240.0);
+        ui.heading("Chord ID");
+        ui.add_space(4.0);
+        ui.label(RichText::new("Up to 12 characters.").small().weak());
+        let response = ui.text_edit_singleline(text);
+        if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            commit = true;
+        }
         ui.add_space(6.0);
-        ui.label(RichText::new("Timing").strong());
+        ui.horizontal(|ui| {
+            if ui.button("OK").clicked() {
+                commit = true;
+            }
+            if ui.button("Cancel").clicked() {
+                cancel = true;
+            }
+        });
+    });
+    if commit {
+        let mut state = params.chordz_state.write();
+        if let Some(trigger) = selection.get_mut(&mut state) {
+            trigger.set_chord_id(text.trim());
+        }
+        es.id_edit = None;
+    } else if cancel || modal.should_close() {
+        es.id_edit = None;
+    }
+}
+
+fn about_dialog(ctx: &egui::Context, es: &mut EditorState) {
+    if !es.about {
+        return;
+    }
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
+        ui.set_width(380.0);
+        ui.heading("ChordzMac");
+        ui.add_space(4.0);
+        ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+        ui.add_space(4.0);
         ui.label(
-            "Start/End delays and velocity scaling are per note slot. Enable Relative timing to \
-             make the delays accumulate across the chord, which produces strummed chords.",
+            "A native macOS VST3/CLAP MIDI chord generator, an independent \
+             reimplementation of CodeFN42 Chordz 1.14's behaviour built from the \
+             plugin's observable metadata, embedded chord/scale data and the \
+             official user guide. It shares no code with the original.",
         );
-        ui.add_space(6.0);
-        ui.label(RichText::new("Host routing").strong());
-        ui.label(
-            "In Bitwig Studio and REAPER, add the plugin as a note effect and route its MIDI out \
-             to an instrument track. In Ableton Live, use the CLAP version on a MIDI track (Live's \
-             VST3 implementation does not expose MIDI output from instruments).",
-        );
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         ui.label(
             RichText::new(
-                "ChordzMac is an independent reimplementation of CodeFN42 Chordz 1.14's behaviour, \
-                 built from the plugin's observable metadata, embedded chord/scale data and the \
-                 official user guide. It shares no code with the original.",
+                "ChordzMac is a MIDI processor: place it before an instrument. \
+                 In Ableton Live use the CLAP build.",
             )
             .small()
             .weak(),
         );
+        ui.add_space(8.0);
+        if ui.button("Close").clicked() {
+            close = true;
+        }
     });
-}
-
-// ---------------------------------------------------------------------------
-// Trigger keyboard
-// ---------------------------------------------------------------------------
-
-const BLACK_KEYS: [bool; 12] = [
-    false, true, false, true, false, false, true, false, true, false, true, false,
-];
-
-fn draw_keyboard(ui: &mut egui::Ui, state: &ChordzState, params: &ChordzParams) {
-    let white_notes: Vec<u8> = (KEYS_START..=KEYS_END)
-        .filter(|note| !BLACK_KEYS[(note % 12) as usize])
-        .collect();
-    let width = white_notes.len() as f32 * WHITE_KEY_WIDTH;
-    let (area, _) = ui.allocate_exact_size(Vec2::new(width, KEYBOARD_HEIGHT), Sense::hover());
-    let painter = ui.painter_at(area);
-
-    let mut preview: Option<(bool, usize)> = None;
-
-    // White keys first so the black keys can overlap them.
-    for (index, note) in white_notes.iter().enumerate() {
-        let rect = egui::Rect::from_min_size(
-            egui::pos2(area.left() + index as f32 * WHITE_KEY_WIDTH, area.top()),
-            Vec2::new(WHITE_KEY_WIDTH - 1.0, KEYBOARD_HEIGHT),
-        );
-        let response = ui.interact(rect, ui.id().with(("white-key", *note)), Sense::click());
-        let resolution = chordz_core::resolve(state, *note);
-        let hovered = response.hovered() && resolution.is_some();
-        let fill = match (resolution.is_some(), hovered) {
-            (true, true) => TRIGGER_FILL_HOVER,
-            (true, false) => TRIGGER_FILL,
-            (false, _) => WHITE_FILL,
-        };
-        painter.rect_filled(rect, CornerRadius::same(2), fill);
-
-        painter.text(
-            egui::pos2(rect.center().x, rect.bottom() - 4.0),
-            Align2::CENTER_BOTTOM,
-            note_name_with_octave(*note, state.lowest_octave),
-            FontId::proportional(8.0),
-            Color32::from_rgb(90, 90, 90),
-        );
-
-        if let Some(resolution) = resolution {
-            let trigger = if resolution.variation {
-                state.variations.get(resolution.index)
-            } else {
-                state.triggers.get(resolution.index)
-            };
-            if let Some(trigger) = trigger {
-                if !trigger.chord_id.is_empty() {
-                    painter.text(
-                        egui::pos2(rect.center().x, rect.top() + 6.0),
-                        Align2::CENTER_TOP,
-                        &trigger.chord_id,
-                        FontId::proportional(9.0),
-                        Color32::from_rgb(90, 62, 10),
-                    );
-                }
-            }
-            if response.clicked() {
-                preview = Some((resolution.variation, resolution.index));
-            }
-            if hovered {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-        }
-    }
-
-    // Black keys.
-    for note in KEYS_START..=KEYS_END {
-        if !BLACK_KEYS[(note % 12) as usize] {
-            continue;
-        }
-        let Some(next_white) = white_notes.iter().position(|white| *white > note) else {
-            continue;
-        };
-        let x = area.left() + next_white as f32 * WHITE_KEY_WIDTH - WHITE_KEY_WIDTH * 0.30;
-        let rect = egui::Rect::from_min_size(
-            egui::pos2(x, area.top()),
-            Vec2::new(WHITE_KEY_WIDTH * 0.60, KEYBOARD_HEIGHT * 0.62),
-        );
-        let response = ui.interact(rect, ui.id().with(("black-key", note)), Sense::click());
-        let resolution = chordz_core::resolve(state, note);
-        let hovered = response.hovered() && resolution.is_some();
-        let fill = match (resolution.is_some(), hovered) {
-            (true, true) => TRIGGER_BLACK_HOVER,
-            (true, false) => TRIGGER_BLACK_FILL,
-            (false, _) => BLACK_FILL,
-        };
-        painter.rect_filled(rect, CornerRadius::same(2), fill);
-        if let Some(resolution) = resolution {
-            if response.clicked() {
-                preview = Some((resolution.variation, resolution.index));
-            }
-        }
-        if hovered {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        }
-    }
-
-    if let Some((variation, index)) = preview {
-        params.request_preview(variation, index);
+    if close || modal.should_close() {
+        es.about = false;
     }
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Helpers shared with the pages
 // ---------------------------------------------------------------------------
 
-fn set_tonic(state: &mut ChordzState, tonic: u8) {
+pub fn set_tonic(state: &mut ChordzState, tonic: u8) {
     let tonic = tonic % 12;
     let delta = (tonic as i16 - state.tonic as i16).rem_euclid(12) as u8;
     state.tonic = tonic;
@@ -771,7 +455,7 @@ fn set_tonic(state: &mut ChordzState, tonic: u8) {
     }
 }
 
-fn apply_suggested_triads(es: &mut EditorState, state: &mut ChordzState) {
+pub fn apply_suggested_triads(es: &mut EditorState, state: &mut ChordzState) {
     let Some(template) = es
         .library
         .templates

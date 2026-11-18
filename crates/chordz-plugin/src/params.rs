@@ -162,15 +162,20 @@ pub struct ChordzParams {
 
     /// Set by the editor, read by the audio thread.
     pub preview: Arc<AtomicU64>,
+
+    /// Single-note preview (Ctrl+click on the chord keyboard). Same encoding
+    /// as `preview` but the low bits hold a MIDI note number.
+    pub preview_note: Arc<AtomicU64>,
 }
 
 impl ChordzParams {
     pub fn new() -> Self {
         Self {
-            editor_state: EguiState::from_size(1000, 640),
+            editor_state: EguiState::from_size(1160, 700),
             chordz_state: Arc::new(RwLock::new(ChordzState::default())),
             slots: std::array::from_fn(NoteSlotParams::new),
             preview: Arc::new(AtomicU64::new(0)),
+            preview_note: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -207,6 +212,25 @@ impl ChordzParams {
                 value & PREVIEW_VARIATION_BIT != 0,
                 (value & 0xFFFF) as usize,
             ))
+        }
+    }
+
+    pub fn request_note_preview(&self, note: u8) {
+        let generation = (self.preview_note.load(std::sync::atomic::Ordering::Relaxed) >> 32) + 1;
+        self.preview_note.store(
+            (generation << 32) | note as u64,
+            std::sync::atomic::Ordering::Release,
+        );
+    }
+
+    pub fn take_note_preview(&self) -> Option<u8> {
+        let value = self
+            .preview_note
+            .swap(0, std::sync::atomic::Ordering::Acquire);
+        if value == 0 {
+            None
+        } else {
+            Some((value & 0xFF) as u8)
         }
     }
 }

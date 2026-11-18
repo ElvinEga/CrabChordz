@@ -223,17 +223,30 @@ and presets stay coherent even though the timing values are host parameters.
 
 ### Editor
 
-The egui editor has four pages:
+The editor is modelled on the original Chordz window: charcoal panels with teal
+accents, a fixed 1160×700 design canvas that is proportionally zoomed to fit the
+resizable host window, and a header with a hamburger menu, the preset name
+(click it to open the load dialog) and an info panel that describes the hovered
+control or the selected trigger.
 
-1. **Chords** — tonic selector, transpose buttons, scale/chord template menu,
-   clickable trigger keyboard with chord IDs and hover preview, per-degree chord
-   assignment from the factory library, black-key variations, easy mode, follow
-   trigger notes, relative timing, same random velocity, random note assignment,
-   octave zones and transposes, “Suggest triads”, and “Reset to Major”.
-2. **Note Timing** — sliders for all 30 original parameters.
-3. **Presets** — save/load `.codefn42p` (original Chordz) and `.json` presets,
-   shows the data folder.
-4. **Help** — behaviour notes and host routing instructions.
+- **Menu** — Init (loads an `init` preset if one exists), Load/Save Preset,
+  Lowest Octave (-2/-1/0), Suggest triads, Reset to Major, Reload library, About.
+- **Chord Setup** — tonic selector and ± transpose, template dropdown with an
+  explicit Apply, Easy Mode; a one-octave trigger keyboard (click selects,
+  double-click renames the chord ID, right-click edits root/chord/copy/paste/
+  clear, Ctrl+click and hover preview); octave range and transpose controls;
+  and a five-octave chord-note keyboard where clicking toggles notes (auto slot
+  assignment), right-click sets a note's slot, and Ctrl+click previews a single
+  note.
+- **Timing / Velocity** — five slot columns with delay slider boxes (hold Alt
+  to edit the amber random range) and velocity knobs. Drag to edit, Shift for
+  fine control, double-click or right-click to enter a value, Ctrl+click resets
+  to the default. The relative timing / same random velocity / random note
+  assignment flags live here.
+- **Presets** — a slim list tab; the main load dialog shows presets in three
+  alphabetical columns like the original, with OK/Cancel, double-click to load,
+  and right-click Delete (with confirmation) / Show in Folder. Both
+  `.codefn42p` and `.json` formats can be saved.
 
 ### Tests
 
@@ -325,10 +338,6 @@ After inserting the plugin, play notes in the chord zone. With the default state
 - **No MIDI CC learn.** The original can learn parameters from MIDI CC. Supporting
   that in VST3 requires exposing 16×130 CC parameters, so v1 relies on host
   automation. `MidiConfig::Basic` is used for this reason.
-- **Simplified chord editing.** The original has a five-octave chord-note
-  keyboard where individual notes are toggled and assigned slot numbers. ChordzMac
-  v1 assigns whole chords from `Chords.txt`/templates and previews them; per-note
-  editing and copy/paste between triggers are not exposed in the UI.
 - **No drag-and-drop preset browser or `.fxp` import.** The original's binary
   VST program chunks are not compatible. `.codefn42p` preset files are fully
   supported (read/write); compressed presets must be re-saved uncompressed in

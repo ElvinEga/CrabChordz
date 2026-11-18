@@ -525,6 +525,15 @@ impl Engine {
             self.schedule_off(release_at, channel, out);
         }
     }
+
+    /// Preview a single note (Ctrl+click on the chord keyboard).
+    pub fn preview_note(&mut self, note: u8, channel: u8, at: u64) {
+        if note > 127 {
+            return;
+        }
+        self.schedule_on(at, channel, note, 100);
+        self.schedule_off(at + self.ms_to_samples(600.0), channel, note);
+    }
 }
 
 /// Resolve a note to a chord trigger.

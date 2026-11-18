@@ -14,7 +14,7 @@ use chordz_core::preset::{
 use nih_plug::prelude::ParamSetter;
 use nih_plug_egui::egui::{self, ComboBox, RichText};
 
-use super::{EditorState, Selection};
+use super::{EditorState, LoadTab, Selection};
 use crate::params::ChordzParams;
 
 pub fn load_path(
@@ -96,15 +96,22 @@ fn row_context_menu(response: &egui::Response, es: &mut EditorState, path: &Path
     });
 }
 
-/// The modal load dialog: three column-major alphabetical columns, OK/Cancel,
-/// double-click to load, right-click for Delete / Show in Folder.
+/// The modal load dialog: Presets / MIDI tabs, three column-major
+/// alphabetical columns, OK/Cancel, double-click to load, right-click for
+/// Delete / Show in Folder.
 pub fn load_dialog(
     ctx: &egui::Context,
     es: &mut EditorState,
     params: &ChordzParams,
     setter: &ParamSetter,
 ) {
-    let paths = sorted_presets(es);
+    let preset_paths = sorted_presets(es);
+    // list_midi_files already sorts, so indices stay aligned with es.midi_files.
+    let midi_paths = es.midi_files.clone();
+    let paths = match es.load_tab {
+        LoadTab::Presets => &preset_paths,
+        LoadTab::Midi => &midi_paths,
+    };
     let mut load_now: Option<PathBuf> = None;
     let mut close = false;
 
@@ -112,13 +119,37 @@ pub fn load_dialog(
         ui.set_width(640.0);
         ui.heading("Load Preset");
         ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut es.load_tab, LoadTab::Presets, "Presets");
+            ui.selectable_value(&mut es.load_tab, LoadTab::Midi, "MIDI");
+        });
+        ui.add_space(4.0);
+        let selected = match es.load_tab {
+            LoadTab::Presets => es.load_selected,
+            LoadTab::Midi => es.load_midi_selected,
+        };
         if paths.is_empty() {
-            ui.label("No presets found.");
-            ui.label(
-                RichText::new(format!("Save presets to {}", preset_dir().display()))
-                    .small()
-                    .weak(),
-            );
+            match es.load_tab {
+                LoadTab::Presets => {
+                    ui.label("No presets found.");
+                    ui.label(
+                        RichText::new(format!("Save presets to {}", preset_dir().display()))
+                            .small()
+                            .weak(),
+                    );
+                }
+                LoadTab::Midi => {
+                    ui.label("No MIDI files yet.");
+                    ui.label(
+                        RichText::new(
+                            "Import .mid files in the Presets tab, or drop them onto \
+                             this window.",
+                        )
+                        .small()
+                        .weak(),
+                    );
+                }
+            }
         } else {
             let rows = paths.len().div_ceil(3);
             egui::ScrollArea::vertical()
@@ -138,7 +169,7 @@ pub fn load_dialog(
                                         let name = preset_name(path);
                                         let response = ui.add(
                                             egui::Button::new(RichText::new(&name).size(12.0))
-                                                .fill(if es.load_selected == Some(index) {
+                                                .fill(if selected == Some(index) {
                                                     super::theme::TEAL_DIM
                                                 } else {
                                                     egui::Color32::TRANSPARENT
@@ -147,7 +178,15 @@ pub fn load_dialog(
                                                 .min_size(egui::Vec2::new(196.0, 20.0)),
                                         );
                                         if response.clicked() {
-                                            es.load_selected = Some(index);
+                                            match es.load_tab {
+                                                LoadTab::Presets => {
+                                                    es.load_selected = Some(index);
+                                                }
+                                                LoadTab::Midi => {
+                                                    es.load_midi_selected = Some(index);
+                                                    analyze_midi_at(es, index);
+                                                }
+                                            }
                                         }
                                         if response.double_clicked() {
                                             load_now = Some(path.clone());
@@ -160,14 +199,43 @@ pub fn load_dialog(
                     });
                 });
         }
+        if es.load_tab == LoadTab::Midi {
+            if let (Some(index), Some(analysis)) = (es.load_midi_selected, &es.midi_analysis) {
+                if paths
+                    .get(index)
+                    .is_some_and(|path| analysis.name == preset_name(path))
+                {
+                    let (tonic, minor) = analysis.key();
+                    let source = if analysis.filename_key.is_some() {
+                        "from filename"
+                    } else {
+                        "estimated"
+                    };
+                    let tempo = analysis
+                        .tempo_bpm
+                        .map(|bpm| format!(" · {bpm:.0} BPM"))
+                        .unwrap_or_default();
+                    ui.label(
+                        RichText::new(format!(
+                            "Key {} {} ({source}) · {} chords{tempo}",
+                            note_name(tonic),
+                            if minor { "minor" } else { "major" },
+                            analysis.chords.len(),
+                        ))
+                        .small()
+                        .weak(),
+                    );
+                }
+            }
+        }
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let ok_enabled = es.load_selected.is_some_and(|index| index < paths.len());
+            let ok_enabled = selected.is_some_and(|index| index < paths.len());
             if ui
                 .add_enabled(ok_enabled, egui::Button::new("OK"))
                 .clicked()
             {
-                if let Some(index) = es.load_selected {
+                if let Some(index) = selected {
                     load_now = paths.get(index).cloned();
                 }
             }
@@ -178,9 +246,17 @@ pub fn load_dialog(
     });
 
     if let Some(path) = load_now {
-        let mut state = params.chordz_state.write();
-        load_path(es, &mut state, params, setter, &path);
-        es.load_dialog = false;
+        let loaded = match es.load_tab {
+            LoadTab::Presets => {
+                let mut state = params.chordz_state.write();
+                load_path(es, &mut state, params, setter, &path);
+                true
+            }
+            LoadTab::Midi => load_midi_path(es, params, &path),
+        };
+        if loaded {
+            es.load_dialog = false;
+        }
     } else if close || modal.should_close() {
         es.load_dialog = false;
     }
@@ -283,6 +359,7 @@ pub fn delete_confirm(ctx: &egui::Context, es: &mut EditorState) {
                 es.presets = list_presets(&preset_dir());
                 es.midi_files = list_midi_files(&midi_dir());
                 es.load_selected = None;
+                es.load_midi_selected = None;
                 es.midi_selected = None;
                 es.midi_analysis = None;
             }
@@ -311,6 +388,7 @@ pub fn tab(
             if ui.button("Load Preset…").clicked() {
                 es.presets = list_presets(&preset_dir());
                 es.load_selected = None;
+                es.load_midi_selected = None;
                 es.load_dialog = true;
             }
             if ui
@@ -377,10 +455,17 @@ pub fn tab(
 // ---------------------------------------------------------------------------
 
 fn select_midi(es: &mut EditorState, index: usize) {
+    if index < es.midi_files.len() {
+        es.midi_selected = Some(index);
+        analyze_midi_at(es, index);
+    }
+}
+
+/// Read and analyze `es.midi_files[index]`, updating the shared preview state.
+fn analyze_midi_at(es: &mut EditorState, index: usize) {
     let Some(path) = es.midi_files.get(index).cloned() else {
         return;
     };
-    es.midi_selected = Some(index);
     let name = preset_name(&path);
     match std::fs::read(&path) {
         Ok(bytes) => match analyze_midi(
@@ -404,6 +489,37 @@ fn select_midi(es: &mut EditorState, index: usize) {
             es.message = format!("{name}: {err}");
         }
     }
+}
+
+/// Load a MIDI file straight from the load dialog. Returns false (keeping the
+/// dialog open) when the file cannot be read or analyzed.
+fn load_midi_path(es: &mut EditorState, params: &ChordzParams, path: &Path) -> bool {
+    let name = preset_name(path);
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            es.message = format!("{name}: {err}");
+            return false;
+        }
+    };
+    let analysis = match analyze_midi(
+        &bytes,
+        &path.file_name().unwrap_or_default().to_string_lossy(),
+        &es.library,
+    ) {
+        Ok(analysis) => analysis,
+        Err(err) => {
+            es.message = format!("{name}: {err}");
+            return false;
+        }
+    };
+    let (tonic, _) = analysis.key();
+    let mut state = params.chordz_state.write();
+    apply_analysis(&analysis, tonic, &mut state);
+    es.message = format!("Loaded MIDI progression \"{}\"", analysis.name);
+    es.selection = Some(Selection::Degree(0));
+    es.template_choice = None;
+    true
 }
 
 fn load_midi(es: &mut EditorState, state: &mut ChordzState) {

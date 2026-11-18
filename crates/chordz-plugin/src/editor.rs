@@ -36,6 +36,13 @@ pub enum Tab {
     Presets,
 }
 
+/// Which list the Load Preset dialog is showing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LoadTab {
+    Presets,
+    Midi,
+}
+
 /// Which trigger the chord-note keyboard is editing.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Selection {
@@ -87,7 +94,9 @@ pub struct EditorState {
     clipboard: Option<Trigger>,
     hover_key: Option<usize>,
     load_dialog: bool,
+    load_tab: LoadTab,
     load_selected: Option<usize>,
+    load_midi_selected: Option<usize>,
     save_dialog: bool,
     delete_confirm: Option<PathBuf>,
     id_edit: Option<(Selection, String)>,
@@ -135,7 +144,9 @@ pub fn create(params: Arc<ChordzParams>) -> Option<Box<dyn Editor>> {
         clipboard: None,
         hover_key: None,
         load_dialog: false,
+        load_tab: LoadTab::Presets,
         load_selected: None,
+        load_midi_selected: None,
         save_dialog: false,
         delete_confirm: None,
         id_edit: None,
@@ -231,6 +242,7 @@ fn draw_design(
         {
             es.presets = list_presets(&preset_dir());
             es.load_selected = None;
+            es.load_midi_selected = None;
             es.load_dialog = true;
         }
 
@@ -284,6 +296,7 @@ fn menu_contents(
     if ui.button("Load Preset…").clicked() {
         es.presets = list_presets(&preset_dir());
         es.load_selected = None;
+        es.load_midi_selected = None;
         es.load_dialog = true;
         ui.close_menu();
     }

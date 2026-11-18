@@ -221,6 +221,27 @@ and presets stay coherent even though the timing values are host parameters.
 - A preset stores both the setup and the five note setups; loading applies the
   note setups through the host parameter API so automation stays consistent.
 
+### MIDI progressions
+
+The Presets tab also loads chord progressions from `.mid` files
+([`crates/chordz-core/src/midi.rs`](crates/chordz-core/src/midi.rs)):
+
+- Files live in `~/Documents/ChordzMac/Midi/`. Seven example progressions are
+  embedded in the binary and seeded on first run; **Import** copies any other
+  `.mid` in (auto-renaming collisions), and files can be dropped onto the
+  editor window.
+- The analyser parses format 0/1 MIDI, clusters strummed note-ons (~40 ticks at
+  96 ticks/beat), takes the lowest note as the root and skips single-note
+  melody clusters. Distinct chords become one trigger each in order of
+  appearance, with voicings kept exactly as played (bass octaves included) and
+  chord IDs matched against `Chords.txt` where possible.
+- The key comes from the filename ("F Minor"); files without one get a
+  pitch-class histogram estimate. The preview shows the detected key with
+  tonic/mode overrides before you load.
+- Loading replaces the chord content only — zones, transposes, easy mode and
+  all timing values survive. The result is ordinary state, so it can be saved
+  as a `.codefn42p` or `.json` preset like any other setup.
+
 ### Editor
 
 The editor is modelled on the original Chordz window: charcoal panels with teal
@@ -246,7 +267,9 @@ control or the selected trigger.
 - **Presets** — a slim list tab; the main load dialog shows presets in three
   alphabetical columns like the original, with OK/Cancel, double-click to load,
   and right-click Delete (with confirmation) / Show in Folder. Both
-  `.codefn42p` and `.json` formats can be saved.
+  `.codefn42p` and `.json` formats can be saved. A MIDI Progressions section
+  imports `.mid` files, previews the extracted chords and key, and loads them
+  into the setup.
 
 ### Tests
 
@@ -254,10 +277,12 @@ control or the selected trigger.
 cargo test
 ```
 
-- 31 tests in `chordz-core` (parsers, model, engine, JSON preset persistence,
-  and 8 `.codefn42p` tests against the four factory presets: field-level
-  decoding, encode/decode round-trips, file-API round-trip, playback of a
-  decoded voicing, and rejection of corrupt/compressed files).
+- 40 tests in `chordz-core` (parsers, model, engine, JSON preset persistence,
+  8 `.codefn42p` tests against the four factory presets, and 9 MIDI tests
+  against the seven embedded progressions: parsing/tempo, filename keys,
+  exact-voicing extraction, melody skipping, dedupe, key estimation,
+  state-application scope, engine playback of an extracted chord, and
+  seeding/import).
 - 6 tests in `chordz-plugin` that drive the real `Plugin::process` through a mock
   host context: parameter count, chord expansion, easy-mode mapping, out-of-zone
   pass-through/transposition, editor preview, and host state round-tripping.

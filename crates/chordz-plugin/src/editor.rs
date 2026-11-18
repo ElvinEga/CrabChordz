@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chordz_core::data::{default_data_dir, load_library, suggest_triads, Library};
+use chordz_core::midi::{list_midi_files, midi_dir, seed_midi_examples, MidiAnalysis};
 use chordz_core::model::{ChordzState, Trigger};
 use chordz_core::preset::{list_presets, preset_dir, PresetFormat};
 use nih_plug::prelude::{Editor, Param, ParamSetter};
@@ -92,13 +93,19 @@ pub struct EditorState {
     id_edit: Option<(Selection, String)>,
     value_entry: Option<(usize, ParamKind, String)>,
     about: bool,
+    midi_files: Vec<PathBuf>,
+    midi_selected: Option<usize>,
+    midi_analysis: Option<MidiAnalysis>,
+    midi_tonic: u8,
+    midi_minor: bool,
+    midi_import_path: String,
 }
 
 pub fn create(params: Arc<ChordzParams>) -> Option<Box<dyn Editor>> {
     let data_dir = default_data_dir();
     let (library, warnings) = load_library(&data_dir);
 
-    let message = if warnings.is_empty() {
+    let mut message = if warnings.is_empty() {
         format!(
             "Loaded {} chord types and {} scale templates",
             library.chords.len(),
@@ -107,6 +114,11 @@ pub fn create(params: Arc<ChordzParams>) -> Option<Box<dyn Editor>> {
     } else {
         warnings.join(" | ")
     };
+
+    let midi_dir = midi_dir();
+    if let Err(err) = seed_midi_examples(&midi_dir) {
+        message = format!("Could not seed MIDI examples: {err}");
+    }
 
     let state = EditorState {
         library,
@@ -129,6 +141,12 @@ pub fn create(params: Arc<ChordzParams>) -> Option<Box<dyn Editor>> {
         id_edit: None,
         value_entry: None,
         about: false,
+        midi_files: list_midi_files(&midi_dir),
+        midi_selected: None,
+        midi_analysis: None,
+        midi_tonic: 0,
+        midi_minor: false,
+        midi_import_path: String::new(),
     };
 
     let egui_state = params.editor_state.clone();

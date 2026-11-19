@@ -279,7 +279,7 @@ pub fn save_dialog(ctx: &egui::Context, es: &mut EditorState, params: &ChordzPar
             ComboBox::from_id_salt("save-format")
                 .selected_text(match es.preset_format {
                     PresetFormat::Codefn42p => "Chordz (.codefn42p)",
-                    PresetFormat::Json => "ChordzMac (.json)",
+                    PresetFormat::Json => "CrabChordz (.json)",
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(
@@ -290,7 +290,7 @@ pub fn save_dialog(ctx: &egui::Context, es: &mut EditorState, params: &ChordzPar
                     ui.selectable_value(
                         &mut es.preset_format,
                         PresetFormat::Json,
-                        "ChordzMac (.json)",
+                        "CrabChordz (.json)",
                     );
                 });
         });

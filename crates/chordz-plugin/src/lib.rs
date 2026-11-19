@@ -1,4 +1,4 @@
-//! ChordzMac: a macOS VST3/CLAP chord generator modelled on CodeFN42's Chordz.
+//! CrabChordz: a macOS VST3/CLAP chord generator modelled on CodeFN42's Chordz.
 //!
 //! The audio path is a plain pass-through (the plugin only transforms MIDI), but
 //! it still exposes a stereo input/output pair because several hosts refuse to
@@ -21,7 +21,7 @@ mod params;
 
 use params::ChordzParams;
 
-pub struct ChordzMac {
+pub struct CrabChordz {
     params: Arc<ChordzParams>,
 
     engine: Engine,
@@ -29,7 +29,7 @@ pub struct ChordzMac {
     processed_samples: u64,
 }
 
-impl Default for ChordzMac {
+impl Default for CrabChordz {
     fn default() -> Self {
         Self {
             params: Arc::new(ChordzParams::new()),
@@ -39,7 +39,7 @@ impl Default for ChordzMac {
     }
 }
 
-impl ChordzMac {
+impl CrabChordz {
     fn velocity_to_midi(velocity: f32) -> u8 {
         (velocity.clamp(0.0, 1.0) * 127.0).round().clamp(1.0, 127.0) as u8
     }
@@ -47,7 +47,7 @@ impl ChordzMac {
 
 /// Forward one engine event to the host at a buffer-relative sample offset.
 fn send_output(
-    context: &mut impl ProcessContext<ChordzMac>,
+    context: &mut impl ProcessContext<CrabChordz>,
     block_start: u64,
     block_len: u64,
     event: OutputEvent,
@@ -81,10 +81,10 @@ fn send_output(
     }
 }
 
-impl Plugin for ChordzMac {
-    const NAME: &'static str = "ChordzMac";
-    const VENDOR: &'static str = "ChordzMac";
-    const URL: &'static str = "https://example.invalid/chordzmac";
+impl Plugin for CrabChordz {
+    const NAME: &'static str = "CrabChordz";
+    const VENDOR: &'static str = "CrabChordz";
+    const URL: &'static str = "https://example.invalid/crabchordz";
     const EMAIL: &'static str = "noreply@example.invalid";
 
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
@@ -200,8 +200,8 @@ impl Plugin for ChordzMac {
     }
 }
 
-impl ClapPlugin for ChordzMac {
-    const CLAP_ID: &'static str = "com.chordzmac.chordz";
+impl ClapPlugin for CrabChordz {
+    const CLAP_ID: &'static str = "com.crabchordz.crabchordz";
     const CLAP_DESCRIPTION: Option<&'static str> =
         Some("MIDI chord generator with scale templates, easy mode and note timing");
     const CLAP_MANUAL_URL: Option<&'static str> = Some(Self::URL);
@@ -209,14 +209,14 @@ impl ClapPlugin for ChordzMac {
     const CLAP_FEATURES: &'static [ClapFeature] = &[ClapFeature::NoteEffect, ClapFeature::Utility];
 }
 
-impl Vst3Plugin for ChordzMac {
-    const VST3_CLASS_ID: [u8; 16] = *b"ChrdzMac00000001";
+impl Vst3Plugin for CrabChordz {
+    const VST3_CLASS_ID: [u8; 16] = *b"CrabChordz000001";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] =
         &[Vst3SubCategory::Instrument, Vst3SubCategory::Tools];
 }
 
-nih_export_clap!(ChordzMac);
-nih_export_vst3!(ChordzMac);
+nih_export_clap!(CrabChordz);
+nih_export_vst3!(CrabChordz);
 
 #[cfg(test)]
 mod tests {
@@ -232,7 +232,7 @@ mod tests {
         output: Vec<NoteEvent<()>>,
     }
 
-    impl ProcessContext<ChordzMac> for MockContext {
+    impl ProcessContext<CrabChordz> for MockContext {
         fn plugin_api(&self) -> PluginApi {
             PluginApi::Vst3
         }
@@ -242,7 +242,7 @@ mod tests {
         fn execute_gui(&self, _task: ()) {}
 
         fn transport(&self) -> &Transport {
-            unimplemented!("ChordzMac does not read the transport")
+            unimplemented!("CrabChordz does not read the transport")
         }
 
         fn next_event(&mut self) -> Option<NoteEvent<()>> {
@@ -258,7 +258,7 @@ mod tests {
         fn set_current_voice_capacity(&self, _capacity: u32) {}
     }
 
-    fn run_with(plugin: &mut ChordzMac, events: Vec<NoteEvent<()>>) -> Vec<NoteEvent<()>> {
+    fn run_with(plugin: &mut CrabChordz, events: Vec<NoteEvent<()>>) -> Vec<NoteEvent<()>> {
         let mut buffer = Buffer::default();
         let mut aux = AuxiliaryBuffers {
             inputs: &mut [],
@@ -273,7 +273,7 @@ mod tests {
     }
 
     fn run(events: Vec<NoteEvent<()>>) -> Vec<NoteEvent<()>> {
-        run_with(&mut ChordzMac::default(), events)
+        run_with(&mut CrabChordz::default(), events)
     }
 
     fn note_on(note: u8) -> NoteEvent<()> {
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn exposes_the_thirty_original_parameters() {
-        let plugin = ChordzMac::default();
+        let plugin = CrabChordz::default();
         assert_eq!(plugin.params().param_map().len(), 30);
     }
 
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn easy_mode_maps_white_keys_to_degrees() {
-        let mut plugin = ChordzMac::default();
+        let mut plugin = CrabChordz::default();
         plugin.params.chordz_state.write().easy_mode = true;
 
         // D4 is the second white key, i.e. the second degree of C major.
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn notes_outside_the_zone_pass_through() {
-        let mut plugin = ChordzMac::default();
+        let mut plugin = CrabChordz::default();
         {
             let mut state = plugin.params.chordz_state.write();
             state.octave_to = 5;
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn editor_preview_plays_the_first_trigger() {
-        let mut plugin = ChordzMac::default();
+        let mut plugin = CrabChordz::default();
         plugin.params.request_preview(false, 0);
         let output = run_with(&mut plugin, vec![]);
         assert_eq!(note_ons(&output), vec![60, 64, 67]);

@@ -1,6 +1,6 @@
 //! Preset files.
 //!
-//! ChordzMac stores its own presets as JSON, and can also read and write the
+//! CrabChordz stores its own presets as JSON, and can also read and write the
 //! original Windows plugin's `.codefn42p` files. The original keeps presets in
 //! `Documents/CodeFN42/Chordz/Presets`; we use the same folder name.
 
@@ -16,6 +16,7 @@ pub mod codefn42p;
 
 pub use codefn42p::EXTENSION as CODEFN42P_EXTENSION;
 
+// Kept as-is so JSON presets saved under the old ChordzMac name still load.
 pub const PRESET_FORMAT: &str = "chordzmac-preset";
 pub const PRESET_VERSION: u32 = 1;
 
@@ -24,7 +25,7 @@ pub const PRESET_VERSION: u32 = 1;
 pub enum PresetFormat {
     /// Original Windows Chordz preset (`.codefn42p`).
     Codefn42p,
-    /// ChordzMac's diffable JSON preset (`.json`).
+    /// CrabChordz's diffable JSON preset (`.json`).
     Json,
 }
 
@@ -153,7 +154,7 @@ pub fn load_preset(path: &Path) -> Result<Preset, String> {
     let json = fs::read_to_string(path)
         .map_err(|err| format!("Could not read {}: {err}", path.display()))?;
     let preset: Preset = serde_json::from_str(&json)
-        .map_err(|err| format!("{} is not a valid ChordzMac preset: {err}", path.display()))?;
+        .map_err(|err| format!("{} is not a valid CrabChordz preset: {err}", path.display()))?;
     if !preset.is_valid() {
         return Err(format!(
             "{} uses an unsupported preset format or version",
@@ -164,7 +165,7 @@ pub fn load_preset(path: &Path) -> Result<Preset, String> {
 }
 
 /// List presets in a directory, sorted by name. Both original Chordz presets
-/// and ChordzMac JSON presets are included.
+/// and CrabChordz JSON presets are included.
 pub fn list_presets(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();

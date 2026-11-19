@@ -1,6 +1,6 @@
 [package]
-name = "chordz-mac"
-description = "A macOS VST3/CLAP port of the CodeFN42 Chordz MIDI chord generator"
+name = "crabchordz"
+description = "CrabChordz: a macOS VST3/CLAP reimplementation of the CodeFN42 Chordz MIDI chord generator"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -123,7 +123,7 @@ fn every_sample_round_trips_through_encode_and_decode() {
 
 #[test]
 fn saved_codefn42p_file_loads_through_the_preset_browser_api() {
-    let dir = std::env::temp_dir().join(format!("chordzmac-codefn42p-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("crabchordz-codefn42p-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
 
     let original = decode(ORION);

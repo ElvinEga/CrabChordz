@@ -4,7 +4,7 @@ use chordz_core::model::{ChordzState, NoteSetup, NUM_NOTE_SLOTS};
 use chordz_core::preset::{load_preset, save_preset, Preset};
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("chordzmac-{name}-{}", std::process::id()))
+    std::env::temp_dir().join(format!("crabchordz-{name}-{}", std::process::id()))
 }
 
 #[test]

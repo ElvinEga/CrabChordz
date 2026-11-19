@@ -1,4 +1,4 @@
-# Display names for the nih-plug bundler. The package name is `chordz-mac`
-# (Cargo requires lowercase), the shipped plugin is `ChordzMac`.
-[chordz-mac]
-name = "ChordzMac"
+# Display names for the nih-plug bundler. The package name is `crabchordz`
+# (Cargo requires lowercase), the shipped plugin is `CrabChordz`.
+[crabchordz]
+name = "CrabChordz"

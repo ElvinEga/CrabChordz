@@ -182,7 +182,7 @@ fn draw(ctx: &egui::Context, setter: &ParamSetter, es: &mut EditorState, params:
     let zoom = (base_w / DESIGN_W).min(base_h / DESIGN_H).clamp(0.4, 4.0);
     ctx.set_zoom_factor(zoom);
 
-    ResizableWindow::new("chordzmac-window")
+    ResizableWindow::new("crabchordz-window")
         .min_size(Vec2::new(580.0, 350.0))
         .show(ctx, &params.editor_state, |ui| {
             let available = ui.available_rect_before_wrap();
@@ -229,7 +229,7 @@ fn draw_design(
         });
         ui.add_space(6.0);
         ui.label(
-            RichText::new("Chordz")
+            RichText::new("CrabChordz")
                 .size(26.0)
                 .strong()
                 .color(theme::TEAL),
@@ -444,7 +444,7 @@ fn about_dialog(ctx: &egui::Context, es: &mut EditorState) {
     let mut close = false;
     let modal = egui::Modal::new(egui::Id::new("about")).show(ctx, |ui| {
         ui.set_width(380.0);
-        ui.heading("ChordzMac");
+        ui.heading("CrabChordz");
         ui.add_space(4.0);
         ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
         ui.add_space(4.0);
@@ -457,7 +457,7 @@ fn about_dialog(ctx: &egui::Context, es: &mut EditorState) {
         ui.add_space(4.0);
         ui.label(
             RichText::new(
-                "ChordzMac is a MIDI processor: place it before an instrument. \
+                "CrabChordz is a MIDI processor: place it before an instrument. \
                  In Ableton Live use the CLAP build.",
             )
             .small()

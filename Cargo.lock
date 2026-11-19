@@ -293,18 +293,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chordz-mac"
-version = "0.1.0"
-dependencies = [
- "chordz-core",
- "nih_plug",
- "nih_plug_egui",
- "parking_lot",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "clap-sys"
 version = "0.5.0"
 source = "git+https://github.com/micahrj/clap-sys.git?rev=25d7f53fdb6363ad63fbd80049cb7a42a97ac156#25d7f53fdb6363ad63fbd80049cb7a42a97ac156"
@@ -431,6 +419,18 @@ dependencies = [
  "bitflags 1.3.2",
  "core-foundation",
  "libc",
+]
+
+[[package]]
+name = "crabchordz"
+version = "0.1.0"
+dependencies = [
+ "chordz-core",
+ "nih_plug",
+ "nih_plug_egui",
+ "parking_lot",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

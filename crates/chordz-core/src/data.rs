@@ -16,7 +16,8 @@ pub const BUILTIN_TEMPLATES_TXT: &str = include_str!("../data/Scale Templates.tx
 
 pub const CHORDS_FILE: &str = "Chords.txt";
 pub const TEMPLATES_FILE: &str = "Scale Templates.txt";
-pub const DATA_DIR_NAME: &str = "ChordzMac";
+pub const DATA_DIR_NAME: &str = "CrabChordz";
+const LEGACY_DATA_DIR_NAME: &str = "ChordzMac";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ChordType {
@@ -254,7 +255,13 @@ pub fn default_data_dir() -> PathBuf {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
-    home.join("Documents").join(DATA_DIR_NAME)
+    let dir = home.join("Documents").join(DATA_DIR_NAME);
+    // One-time migration of the pre-rename ChordzMac folder.
+    let legacy = home.join("Documents").join(LEGACY_DATA_DIR_NAME);
+    if !dir.exists() && legacy.is_dir() {
+        let _ = fs::rename(&legacy, &dir);
+    }
+    dir
 }
 
 /// Load the library from `dir`, creating the two text files from the embedded

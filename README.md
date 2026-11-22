@@ -3,6 +3,8 @@
 A native macOS **VST3 + CLAP** MIDI chord generator, built in Rust as an independent
 reimplementation of [CodeFN42 Chordz](https://www.codefn42.com/chordz/) 1.14.
 
+![CrabChordz Screenshot](assets/screenshot.jpg)
+
 Chordz turns single notes into chords. You pick a scale tonic and a scale/chord
 template, and every note inside the chord zone plays the chord assigned to that
 scale degree, transposed to the octave you played. Notes outside the zone can be
